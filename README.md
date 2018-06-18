@@ -122,6 +122,17 @@ visited. The unallowed states, `(0, 0)` and `(1, 1)`, should remain unvisited
 an approximately equal number of times.
 
 
+Debugging
+=========
+
+To aid in debugging, `bridging_sampler.cpp` contains a preprocessor definition:
+
+    #define LOGVERBOSE 0
+
+Change the value to `1` and recompile to enable extremely verbose output from
+the sampler.
+
+
 License
 =======
 
