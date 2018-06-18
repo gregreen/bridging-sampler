@@ -71,7 +71,7 @@ The file `src/main.cpp` contains an example problem.
 To sample from our toy model, all you need to do is to include
 `"bridging_sampler.h"`, and then to write the following code:
 
-    // Set up the sampler, providing a function that calcualtes
+    // Set up the sampler, providing a function that calculates
     // log(probability) for each state
     bridgesamp::BridgingSampler sampler(
         2, 2, // # of dimensions, # of samples per dimension

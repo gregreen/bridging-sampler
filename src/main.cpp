@@ -29,7 +29,7 @@ void print_state(const bridgesamp::BridgingSampler& sampler) {
 }
 
 void binary_labeling_toy() {
-    // Set up the sampler, providing a function that calcualtes
+    // Set up the sampler, providing a function that calculates
     // log(probability) for each state
     bridgesamp::BridgingSampler sampler(
         2, 2, // # of dimensions, # of samples per dimension
