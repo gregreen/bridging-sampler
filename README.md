@@ -119,7 +119,17 @@ This code will sample from the augmented space (including the target states
 and the bridging states), and then print the number of times each state was
 visited. The unallowed states, `(0, 0)` and `(1, 1)`, should remain unvisited
 (after burn-in), while the states `(0, 1)` and `(1, 0)` should be visited
-an approximately equal number of times.
+an approximately equal number of times. For example, the above code might
+output
+
+    # of visits:
+    0 1 : 228
+    0 - : 92
+    1 0 : 251
+    1 - : 96
+    - 0 : 95
+    - 1 : 95
+    - - : 143
 
 
 Debugging

@@ -28,7 +28,54 @@ void print_state(const bridgesamp::BridgingSampler& sampler) {
     }
 }
 
-int main() {
+void binary_labeling_toy() {
+    // Set up the sampler, providing a function that calcualtes
+    // log(probability) for each state
+    bridgesamp::BridgingSampler sampler(
+        2, 2, // # of dimensions, # of samples per dimension
+        [](const std::vector<uint16_t>& s) -> double {
+            if(s[0] == s[1]) {
+                return -100.;  // Zero probability for (0,0) and (1,1)
+            } else {
+                return 0.;     // Probability=1 for (1,0) and (0,1)
+            }
+        }
+    );
+    
+    sampler.randomize_state();
+
+    // Burn-in
+    for(int n=0; n<1000; n++) {
+        sampler.step();
+    }
+
+    // Store the number of visits to each state
+    std::map<std::vector<uint16_t>, uint32_t> n_visits;
+
+    // Sample
+    for(int n=0; n<1000; n++) {
+        sampler.step();
+        n_visits[sampler.get_state()]++;
+    }
+    
+    // Print out the number of visits to each state
+    std::cout << "# of visits:"
+              << std::endl;
+    
+    for(auto& v : n_visits) {
+        for(auto s : v.first) {
+            if(s == sampler.get_n_samples()) {
+                std::cout << "- ";
+            } else {
+                std::cout << s << " ";
+            }
+        }
+        std::cout << ": " << v.second << std::endl;
+    }
+}
+
+
+void toy() {
     bridgesamp::BridgingSampler sampler(
         3, 5,
         [](const std::vector<uint16_t>& s) -> double {
@@ -142,6 +189,11 @@ int main() {
     //    }
     //    std::cout << std::endl;
     //}
+}
+
+
+int main() {
+    binary_labeling_toy();
 
     return 0;
 }
