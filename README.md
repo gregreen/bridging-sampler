@@ -11,7 +11,7 @@ states:
 * `(0, 0)` -> 0
 * `(0, 1)` -> 1
 * `(1, 0)` -> 1
-* `(0, 0)` -> 0
+* `(1, 1)` -> 0
 
 For such a small state space, we can obviously calculate the probabilities
 of all possible states directly, but for larger state spaces, we have to
