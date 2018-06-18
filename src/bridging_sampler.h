@@ -115,6 +115,7 @@ public:
     uint16_t get_n_samples() const;
 
     const std::vector<uint16_t>& get_state() const;
+    uint16_t get_state_rank() const; // Get current level in hierarchy
 };
 
 

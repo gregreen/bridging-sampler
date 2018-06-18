@@ -2,9 +2,20 @@
 #include <iostream>
 #include "bridging_sampler.h"
 
-
 void print_state(const bridgesamp::BridgingSampler& sampler) {
-    std::cout << std::endl;
+    std::cout << "* ";
+
+    for(auto s : sampler.get_state()) {
+        if(s == sampler.get_n_samples()) {
+            std::cout << "- ";
+        } else {
+            std::cout << s << " ";
+        }
+    }
+
+    std::cout << "(" << sampler.get_state_rank() << ")"
+              << std::endl << std::endl;
+
     for(auto it=sampler.cbegin(); it!=sampler.cend(); ++it) {
         for(auto s : it->first) {
             if(s == sampler.get_n_samples()) {
@@ -19,15 +30,19 @@ void print_state(const bridgesamp::BridgingSampler& sampler) {
 
 int main() {
     bridgesamp::BridgingSampler sampler(
-        2, 2,
+        3, 5,
         [](const std::vector<uint16_t>& s) -> double {
-            if(s[0] == s[1]) {
-                return -100.;
-            } else if(s[0] == 0) {
-                return 0.;
-            } else {
-                return -1.;
+            for(auto x : s) {
+                if(x != s[0]) {
+                    return -100.;
+                }
             }
+            return 0.;
+            //if(s[0] == s[1]) {
+            //    return -100.;
+            //} else {
+            //    return 0.;
+            //}
         }
     );
     
@@ -55,47 +70,55 @@ int main() {
     //    }
     //}
 
-    std::vector<std::vector<uint16_t>> chain;
-
+    std::cout << "Initial sampler state:" << std::endl;
     print_state(sampler);
     std::cout << std::endl;
-    chain.push_back(sampler.get_state());
+    //chain.push_back(sampler.get_state());
 
     for(int n=0; n<1000; n++) {
         sampler.step();
-        std::cout << std::endl;
-        print_state(sampler);
-        std::cout << std::endl;
-        chain.push_back(sampler.get_state());
+        //std::cout << std::endl;
+        //print_state(sampler);
+        //std::cout << std::endl;
+        //chain.push_back(sampler.get_state());
     }
     
+    //std::vector<std::vector<uint16_t>> chain;
     std::map<std::vector<uint16_t>, uint32_t> n_visits;
 
     for(int n=0; n<100000; n++) {
         sampler.step();
-        std::cout << std::endl;
-        print_state(sampler);
-        std::cout << std::endl;
-        chain.push_back(sampler.get_state());
+        //std::cout << std::endl;
+        //print_state(sampler);
+        //std::cout << std::endl;
+        //chain.push_back(sampler.get_state());
         n_visits[sampler.get_state()]++;
     }
 
-    std::cout << std::endl
-              << "chain:"
-              << std::endl;
-    for(auto& c : chain) {
-        for(auto s : c) {
-            std::cout << s << " ";
-        }
-        std::cout << std::endl;
-    }
+    //std::cout << std::endl
+    //          << "chain:"
+    //          << std::endl;
+    //for(auto& c : chain) {
+    //    for(auto s : c) {
+    //        std::cout << s << " ";
+    //    }
+    //    std::cout << std::endl;
+    //}
+    
+    std::cout << "Final sampler state:" << std::endl;
+    print_state(sampler);
+    std::cout << std::endl;
     
     std::cout << std::endl
               << "# of visits:"
               << std::endl;
     for(auto& v : n_visits) {
         for(auto s : v.first) {
-            std::cout << s << " ";
+            if(s == sampler.get_n_samples()) {
+                std::cout << "- ";
+            } else {
+                std::cout << s << " ";
+            }
         }
         std::cout << ": " << v.second << std::endl;
     }
