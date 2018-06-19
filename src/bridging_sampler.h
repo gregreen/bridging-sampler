@@ -4,7 +4,7 @@
 
 #include <cstdint>
 #include <vector>
-#include <map>
+#include <unordered_map>
 #include <random>
 #include <functional>
 #include <algorithm>
@@ -17,12 +17,26 @@
 
 namespace bridgesamp {
 
+
+class VectorHasher {
+    // Hashing function for vectors, required to use them as
+    // keys in an unordered_map. Taken from HolKann's
+    // StackOverflow answer: <https://stackoverflow.com/a/27216842/1103939>.
+public:
+    std::size_t operator()(const std::vector<uint16_t>& vec) const;
+};
+
+
 struct Node {
+    // An individual state in the combinatorial space. Only need
+    // to store p and log(p), since the nodes will be stored in a
+    // map, with the state as the key.
     double p, logp;
 };
 
 
-typedef std::map<std::vector<uint16_t>, Node> NodeMap;
+// An unordered_map that maps state vectors -> (p, log(p))
+typedef std::unordered_map<std::vector<uint16_t>, Node, VectorHasher> NodeMap;
 
 
 class BridgingSampler {
@@ -37,6 +51,14 @@ private:
     // Function that returns log(p) of node
     std::function<double(const std::vector<uint16_t>&)> eval_node;
 
+    // Function that returns log(p) of several nodes that differ only in
+    // one dimension
+    std::function<double(
+            uint16_t, // dimension that nodes differ in
+            const std::vector<uint16_t>&, // sample # in each dimension
+            std::vector<double>&  // holds log(p) of each state
+    )> eval_conditional;
+
     double p0, logp0; // Assumed value of p (or log(p)) for unexplored nodes
     double log_n_samples;
 
@@ -50,11 +72,16 @@ private:
     std::uniform_int_distribution<uint16_t> r_samp;   // Draw a random sample
     std::uniform_real_distribution<double> r_uniform; // Draw from U(0,1)
 
-    // Workspace
-    std::vector<uint16_t> _samp_ws; // Workspace with capacity equal to n_samples
-    std::vector<uint16_t> _dim_ws;  // Workspace with capacity equal to n_dim
-    
-    std::vector<double> _samp_ws_dbl; // Workspace with capacity equal to n_samples
+    // Workspaces
+    //   - Worspaces ending in _dim_ws have capacity equal to n_dim
+    //   -     "       "    "  _samp_ws "      "       "   "  n_samples
+    //   Each workspace is named according to the member function that uses it
+    std::vector<uint16_t> _rand_state_dim_ws;
+    std::vector<uint16_t> _gibbs_idx_samp_ws;
+    std::vector<double> _gibbs_lnp_samp_ws;
+    std::vector<uint16_t> _gibbs_state_dim_ws;
+    std::vector<uint16_t> _transition_state_dim_ws;
+    std::vector<uint16_t> _percolate_dim_ws;
 
     // Navigation
     //std::map<std::vector<uint16_t>, Node>::iterator up(
@@ -90,15 +117,18 @@ public:
     BridgingSampler(uint16_t n_dim,
                     uint16_t n_samples,
                     std::function<double(const std::vector<uint16_t>&)> logp_node);
-
+    
     void step(); // Choose and execute a step type
 
     void randomize_state(); // Jump to randomly chosen base state
     
+    // Take a Gibbs step in the specified dimension
+    void gibbs(uint16_t dim);
+
     // Take a Gibbs step in the specified dimension, without evaluating
     // unexplored states.
     void lazy_gibbs(uint16_t dim);
-
+    
     // Take a Gibbs step, choosing the dimension randomly
     void lazy_gibbs_choose_dim();
     
@@ -108,6 +138,21 @@ public:
     // Transition to a randomly selected state one level down in the hierarchy
     void transition_forward();
 
+    // Set conditional probability function, to be used in Gibbs steps
+    void set_conditional_prob(
+        std::function<double(
+            uint16_t, // dimension that nodes differ in
+            const std::vector<uint16_t>&, // sample # in each dimension
+            std::vector<double>&  // holds log(p) of each state
+        )> f
+    );
+
+    void set_logp0(double _logp0);
+
+    // Statistics
+    double fill_factor() const; // Fraction of nodes explored
+
+    // Getters
     NodeMap::const_iterator cbegin() const;
     NodeMap::const_iterator cend() const;
 

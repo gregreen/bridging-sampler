@@ -17,10 +17,13 @@ bridgesamp::BridgingSampler::BridgingSampler(
     std::random_device rd;
     r.seed(rd());
     
-    // Allocate memory to sample workspace
-    _samp_ws.resize(n_samples);
-    _samp_ws_dbl.resize(n_samples);
-    _dim_ws.resize(n_dim);
+    // Allocate memory to workspaces
+    _rand_state_dim_ws.resize(n_dim);
+    _gibbs_idx_samp_ws.resize(n_samples);
+    _gibbs_lnp_samp_ws.resize(n_samples);
+    _gibbs_state_dim_ws.resize(n_dim);
+    _transition_state_dim_ws.resize(n_dim);
+    _percolate_dim_ws.resize(n_dim);
 
     // Transition probabilities
     b_prob.reserve(n_dim);
@@ -83,6 +86,22 @@ void bridgesamp::BridgingSampler::step() {
 }
 
 
+void bridgesamp::BridgingSampler::set_conditional_prob(
+    std::function<double(
+        uint16_t, // dimension that nodes differ in
+        const std::vector<uint16_t>&, // sample # in each dimension
+        std::vector<double>&  // holds log(p) of each state
+    )> f
+) {
+    eval_conditional = f;
+}
+
+
+void bridgesamp::BridgingSampler::set_logp0(double _logp0) {
+    logp0 = _logp0;
+}
+
+
 uint16_t bridgesamp::BridgingSampler::get_n_dim() const {
     return n_dim;
 }
@@ -109,26 +128,29 @@ void bridgesamp::BridgingSampler::randomize_state() {
     #endif
 
     // Choose random sample for each dimension
-    for(auto& s : _dim_ws) {
+    for(auto& s : _rand_state_dim_ws) {
         s = r_samp(r);
     }
     
     // Find node
-    auto it = node.find(_dim_ws);
+    auto it = node.find(_rand_state_dim_ws);
 
     // Create node if it doesn't exist
     if(it == node.end()) {
         #if LOGVERBOSE
         std::cout << "Creating node";
-        for(auto s : _dim_ws) {
+        for(auto s : _rand_state_dim_ws) {
             std::cout << " " << s;
         }
         std::cout << std::endl;
         #endif
 
-        double logp = eval_node(_dim_ws);
+        double logp = eval_node(_rand_state_dim_ws);
         it = node.insert(
-            std::make_pair(_dim_ws, bridgesamp::Node{std::exp(logp), logp})
+            std::make_pair(
+                _rand_state_dim_ws,
+                bridgesamp::Node{std::exp(logp), logp}
+            )
         ).first;
 
         percolate_up(it);
@@ -161,20 +183,20 @@ void bridgesamp::BridgingSampler::_lazy_gibbs_inner(
     #endif
 
     // Find ln(p) of states that have already been explored
-    _samp_ws.clear();     // Will hold explored sample numbers
-    _samp_ws_dbl.clear(); // Will hold corresponding ln(p)
+    _gibbs_idx_samp_ws.clear(); // Will hold explored sample numbers
+    _gibbs_lnp_samp_ws.clear(); // Will hold corresponding ln(p)
 
     for(uint16_t s=0; s<n_samples; s++) {
         starting_state[dim] = s;
 
         auto it = node.find(starting_state);
         if(it != node.end()) {
-            _samp_ws.push_back(s);
-            _samp_ws_dbl.push_back(it->second.logp);
+            _gibbs_idx_samp_ws.push_back(s);
+            _gibbs_lnp_samp_ws.push_back(it->second.logp);
         }
     }
 
-    uint16_t n_unexplored = n_samples - _samp_ws.size();
+    uint16_t n_unexplored = n_samples - _gibbs_idx_samp_ws.size();
 
     #if LOGVERBOSE
     std::cout << n_unexplored << " of " << n_samples << " states unexplored." << std::endl;
@@ -182,21 +204,21 @@ void bridgesamp::BridgingSampler::_lazy_gibbs_inner(
     
     // Get maximum ln(p) of explored states
     double lnp_max = *(std::max_element(
-        _samp_ws_dbl.begin(),
-        _samp_ws_dbl.end())
+        _gibbs_lnp_samp_ws.begin(),
+        _gibbs_lnp_samp_ws.end())
     );
     
     // Find total ln(p) of explored states
     double lnp_explored = 0.;
 
-    for(auto lnp : _samp_ws_dbl) {
+    for(auto lnp : _gibbs_lnp_samp_ws) {
         lnp_explored += std::exp(lnp - lnp_max);
     }
 
     lnp_explored = std::log(lnp_explored) + lnp_max;
 
     // Calculate total ln(p) of unexplored states
-    double ln_n_unexplored = std::log((double)(n_samples-_samp_ws.size()));
+    double ln_n_unexplored = std::log((double)(n_samples-_gibbs_idx_samp_ws.size()));
     double lnp_unexplored = get_lnp0_of_rank(state_rank) + ln_n_unexplored;
 
     double lnp_tot = add_logs(lnp_unexplored, lnp_explored);
@@ -213,12 +235,15 @@ void bridgesamp::BridgingSampler::_lazy_gibbs_inner(
         #endif
 
         // Pick explored state
-        for(auto& lnp : _samp_ws_dbl) {
+        for(auto& lnp : _gibbs_lnp_samp_ws) {
             lnp = std::exp(lnp - lnp_max);
         }
-        std::discrete_distribution<uint16_t> d(_samp_ws_dbl.begin(), _samp_ws_dbl.end());
+        std::discrete_distribution<uint16_t> d(
+            _gibbs_lnp_samp_ws.begin(),
+            _gibbs_lnp_samp_ws.end()
+        );
 
-        starting_state[dim] = _samp_ws[d(r)];
+        starting_state[dim] = _gibbs_idx_samp_ws[d(r)];
         state = node.find(starting_state);
         
         #if LOGVERBOSE
@@ -245,12 +270,12 @@ void bridgesamp::BridgingSampler::_lazy_gibbs_inner(
         // Scan through to find i_pick'th unexplored sample
         int32_t idx = 0;
         int32_t i_unexplored = -1;
-        auto it_explored = _samp_ws.begin();
+        auto it_explored = _gibbs_idx_samp_ws.begin();
         for(; i_unexplored != i_pick; idx++) {
             #if LOGVERBOSE
             std::cout << "- sample " << idx;
             #endif
-            if((it_explored != _samp_ws.end()) && (*it_explored == idx)) {
+            if((it_explored != _gibbs_idx_samp_ws.end()) && (*it_explored == idx)) {
                 #if LOGVERBOSE
                 std::cout << ": explored" << std::endl;
                 #endif
@@ -282,6 +307,132 @@ void bridgesamp::BridgingSampler::_lazy_gibbs_inner(
 }
 
 
+void bridgesamp::BridgingSampler::gibbs(uint16_t dim) {
+    #if LOGVERBOSE
+    std::cout << "Entering gibbs()" << std::endl;
+    #endif
+    
+    if(state_rank != 0) {
+        #if LOGVERBOSE
+        std::cout << "Can only take Gibbs step at zeroeth level in hierarchy."
+                  << std::endl;
+        std::cout << "Exiting gibbs()" << std::endl;
+        #endif
+        return;
+    }
+    
+    // Copy current state into workspace
+    _gibbs_state_dim_ws.clear();
+    std::copy(
+        state->first.begin(),
+        state->first.end(),
+        std::back_inserter(_gibbs_state_dim_ws)
+    );
+
+    #if LOGVERBOSE
+    std::cout << "Starting state:";
+    for(auto s : _gibbs_state_dim_ws) {
+        std::cout << " " << s;
+    }
+    std::cout << std::endl;
+    #endif
+
+    // Find out which nodes have been explored, and which not
+    _gibbs_idx_samp_ws.clear(); // Will hold samples corresponding to unexplored nodes
+
+    NodeMap::iterator it;
+
+    if(eval_conditional) {
+        #if LOGVERBOSE
+        std::cout << "Using conditional probability function." << std::endl;
+        #endif
+
+        for(int k=0; k<n_samples; k++) {
+            _gibbs_state_dim_ws[dim] = k;
+
+            // Try to find node
+            it = node.find(_gibbs_state_dim_ws);
+
+            if(it == node.end()) { // Node not found
+                _gibbs_idx_samp_ws.push_back(k);
+                _gibbs_lnp_samp_ws.push_back(0.); // dummy value, update later
+            } else {
+                _gibbs_lnp_samp_ws.push_back(it->second.logp);
+            }
+        }
+
+        #if LOGVERBOSE
+        std::cout << _gibbs_idx_samp_ws.size() << " of " << n_samples
+                  << "states unexplored." << std::endl;
+        #endif
+
+        // Determine log(p) of unexplored states using conditional prob. function
+        _gibbs_lnp_samp_ws.resize(n_samples); // Will hold log(p) of each node
+        if(_gibbs_idx_samp_ws.size()) {
+            eval_conditional(dim, _gibbs_state_dim_ws, _gibbs_lnp_samp_ws);
+        }
+
+        // Add nodes, and percolate log(p) upward
+        double logp;
+        for(auto s : _gibbs_idx_samp_ws) {
+            _gibbs_state_dim_ws[dim] = s;
+            logp = _gibbs_lnp_samp_ws[s];
+
+            it = node.insert(
+                std::make_pair(
+                    _gibbs_state_dim_ws,
+                    bridgesamp::Node{std::exp(logp), logp}
+                )
+            ).first;
+
+            // Propagate change in log(p) upward
+            percolate_up(it);
+        }
+    } else {
+        #if LOGVERBOSE
+        std::cout << "No conditional probability function set." << std::endl;
+        #endif
+
+        _gibbs_lnp_samp_ws.clear(); 
+
+        for(int k=0; k<n_samples; k++) {
+            _gibbs_state_dim_ws[dim] = k;
+
+            // Get or create node
+            it = get_node(_gibbs_state_dim_ws);
+            _gibbs_lnp_samp_ws.push_back(it->second.logp);
+        }
+    }
+
+    // Get maximum log(p), and transform log(p) to p/p_max.
+    double logp_max = *std::max(_gibbs_lnp_samp_ws.begin(), _gibbs_lnp_samp_ws.end());
+    for(auto& p : _gibbs_lnp_samp_ws) {
+        p = std::exp(p - logp_max);
+    }
+    
+    #if LOGVERBOSE
+    std::cout << "log(p_max) = " << logp_max << std::endl;
+    #endif
+    
+    std::discrete_distribution<uint16_t> d(
+        _gibbs_lnp_samp_ws.begin(),
+        _gibbs_lnp_samp_ws.end());
+    _gibbs_state_dim_ws[dim] = d(r);
+
+    #if LOGVERBOSE
+    std::cout << "Chose sample #" << _gibbs_state_dim_ws[dim] << std::endl;
+    #endif
+
+    state = get_node(_gibbs_state_dim_ws);
+
+    // TODO: Bulk percolate-up function?
+
+    #if LOGVERBOSE
+    std::cout << "Exiting gibbs()" << std::endl;
+    #endif
+}
+
+
 void bridgesamp::BridgingSampler::lazy_gibbs(uint16_t dim) {
     #if LOGVERBOSE
     std::cout << "Entering lazy_gibbs()" << std::endl;
@@ -295,15 +446,15 @@ void bridgesamp::BridgingSampler::lazy_gibbs(uint16_t dim) {
         return;
     }
 
-    // Copy current state into _dim_ws
-    _dim_ws.clear();
+    // Copy current state into workspace
+    _gibbs_state_dim_ws.clear();
     std::copy(
         state->first.begin(),
         state->first.end(),
-        std::back_inserter(_dim_ws)
+        std::back_inserter(_gibbs_state_dim_ws)
     );
 
-    _lazy_gibbs_inner(_dim_ws, dim);
+    _lazy_gibbs_inner(_gibbs_state_dim_ws, dim);
 
     #if LOGVERBOSE
     std::cout << "Exiting lazy_gibbs()" << std::endl;
@@ -345,7 +496,11 @@ void bridgesamp::BridgingSampler::lazy_gibbs_choose_dim() {
     std::cout << " -> dim = " << dim << std::endl;
     #endif
 
-    lazy_gibbs(dim);
+    if(state_rank == 0) {
+        gibbs(dim);
+    } else {
+        lazy_gibbs(dim);
+    }
 
     #if LOGVERBOSE
     std::cout << "Exiting lazy_gibbs_choose_dim()" << std::endl;
@@ -493,31 +648,31 @@ void bridgesamp::BridgingSampler::transition_backward() {
     }
     
     // Find non-empty dimensions
-    get_nonempty_dims(state, _dim_ws);
-    uint16_t n_nonempty = _dim_ws.size();
+    get_nonempty_dims(state, _transition_state_dim_ws);
+    uint16_t n_nonempty = _transition_state_dim_ws.size();
     #if LOGVERBOSE
     std::cout << n_nonempty << " non-empty dimensions" << std::endl;
     #endif
 
     // Choose a dimension to blank
     std::uniform_int_distribution<uint16_t> d(0, n_nonempty-1);
-    uint16_t idx = _dim_ws[d(r)];
+    uint16_t idx = _transition_state_dim_ws[d(r)];
     
     #if LOGVERBOSE
     std::cout << "Blanking dimension " << idx << std::endl;
     #endif
 
-    // Copy current state into _dim_ws
-    _dim_ws.clear();
+    // Copy current state into workspace
+    _transition_state_dim_ws.clear();
     std::copy(
         state->first.begin(),
         state->first.end(),
-        std::back_inserter(_dim_ws)
+        std::back_inserter(_transition_state_dim_ws)
     );
     
     // Blank the chosen dimension and transition
-    _dim_ws[idx] = n_samples;
-    state = get_node(_dim_ws);
+    _transition_state_dim_ws[idx] = n_samples;
+    state = get_node(_transition_state_dim_ws);
     state_rank++;
     
     #if LOGVERBOSE
@@ -556,34 +711,34 @@ void bridgesamp::BridgingSampler::transition_forward() {
     }
     
     // Find empty dimensions
-    get_empty_dims(state, _dim_ws);
-    uint16_t n_empty = _dim_ws.size();
+    get_empty_dims(state, _transition_state_dim_ws);
+    uint16_t n_empty = _transition_state_dim_ws.size();
     #if LOGVERBOSE
     std::cout << n_empty << " empty dimensions" << std::endl;
     #endif
 
     // Choose a dimension to fill
     std::uniform_int_distribution<uint16_t> d(0, n_empty-1);
-    uint16_t idx = _dim_ws[d(r)];
+    uint16_t idx = _transition_state_dim_ws[d(r)];
     
     #if LOGVERBOSE
     std::cout << "Filling dimension " << idx << std::endl;
     #endif
 
-    // Copy current state into _dim_ws
-    _dim_ws.clear();
+    // Copy current state into workspace
+    _transition_state_dim_ws.clear();
     std::copy(
         state->first.begin(),
         state->first.end(),
-        std::back_inserter(_dim_ws)
+        std::back_inserter(_transition_state_dim_ws)
     );
     
     // Fill the chosen dimension with zero
-    _dim_ws[idx] = 0;
+    _transition_state_dim_ws[idx] = 0;
     state_rank--;
 
     // Take a Gibbs step
-    _lazy_gibbs_inner(_dim_ws, idx);
+    _lazy_gibbs_inner(_transition_state_dim_ws, idx);
     
     #if LOGVERBOSE
     std::cout << "New state:";
@@ -613,9 +768,10 @@ void bridgesamp::BridgingSampler::percolate_up(const NodeMap::iterator& n) {
     #endif
 
     // Find non-empty dimensions
-    get_nonempty_dims(n, _dim_ws);
+    get_nonempty_dims(n, _percolate_dim_ws);
     #if LOGVERBOSE
-    std::cout << _dim_ws.size() << " non-empty dimensions" << std::endl;
+    std::cout << _percolate_dim_ws.size()
+              << " non-empty dimensions" << std::endl;
     #endif
 
     // Determine change in probability to propagate
@@ -644,10 +800,10 @@ void bridgesamp::BridgingSampler::percolate_up(const NodeMap::iterator& n) {
     idx.reserve(n_dim);
     node_key.reserve(n_dim);
 
-    for(int rank=1; rank<=_dim_ws.size(); rank++) {
+    for(int rank=1; rank<=_percolate_dim_ws.size(); rank++) {
         // Blank out every combination of <rank> entries, obtaining
         // keys to all parent nodes
-        CombinationGenerator cgen(_dim_ws.size(), rank);
+        CombinationGenerator cgen(_percolate_dim_ws.size(), rank);
         while(cgen.next(idx)) {
             #if LOGVERBOSE
             std::cout << "Blanking dimensions:";
@@ -728,6 +884,14 @@ void bridgesamp::BridgingSampler::get_empty_dims(
 }
 
 
+double bridgesamp::BridgingSampler::fill_factor() const {
+    uint64_t n_obj = node.size();
+    double n_obj_max = std::pow((double)n_samples+1., (double)n_dim);
+
+    return (double)n_obj / n_obj_max;
+}
+
+
 
 /*
  *  Combination generator - cycles through combinations (n choose r)
@@ -766,5 +930,16 @@ bool bridgesamp::CombinationGenerator::next(std::vector<unsigned int>& out_idx) 
     finished = !std::next_permutation(mask.begin(), mask.end());
 
     return true;
+}
+
+
+std::size_t bridgesamp::VectorHasher::operator()(
+        const std::vector<uint16_t>& vec) const
+{
+    std::size_t seed = vec.size();
+    for(auto& i : vec) {
+        seed ^= i + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    }
+    return seed;
 }
 
